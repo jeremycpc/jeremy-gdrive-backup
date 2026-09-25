@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template. install.sh fills in __SCRIPT__, __DISK__, and __LOG__. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jeremy.drive-backup</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__SCRIPT__</string>
+    <string>--auto</string>
+  </array>
+  <key>StartOnMount</key>
+  <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DRIVE_BACKUP_DISK</key>
+    <string>__DISK__</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__LOG__</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG__</string>
+</dict>
+</plist>

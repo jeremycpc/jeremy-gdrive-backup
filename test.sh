@@ -33,8 +33,25 @@ setup() {
   print "mine" > "$DISK/photos/keep.jpg"
   print "top" > "$DISK/top-level.txt"
 
-  # Stand-ins: no notifications, and caffeinate only runs the command.
-  print '#!/bin/sh\nexit 0' > "$STUBS/osascript"
+  # Stand-ins. osascript records each call in $CALLS and answers the prompt
+  # with $DIALOG_ANSWER: Start, Skip, or anything else for no answer.
+  # caffeinate only runs the command.
+  CALLS="$TMP/osascript-calls.txt"
+  : > "$CALLS"
+  cat > "$STUBS/osascript" <<'STUB'
+#!/bin/sh
+echo "$*" >> "$CALLS"
+case "$*" in
+  *"display dialog"*)
+    case "$DIALOG_ANSWER" in
+      Start) echo "button returned:Start, gave up:false" ;;
+      Skip)  echo "button returned:Skip, gave up:false" ;;
+      *)     echo "button returned:, gave up:true" ;;
+    esac ;;
+esac
+exit 0
+STUB
+  print '#!/bin/sh\nexit 0' > "$STUBS/launchctl"
   print '#!/bin/sh\n[ "$1" = "-i" ] && shift\nexec "$@"' > "$STUBS/caffeinate"
   chmod +x "$STUBS"/*
 }
@@ -47,7 +64,7 @@ teardown() {
 # Run the backup script against the sandbox. Output goes to $OUT.
 run_backup() {
   OUT="$TMP/out.txt"
-  PATH="$STUBS:$PATH" \
+  PATH="$STUBS:$PATH" CALLS="$CALLS" DIALOG_ANSWER="${DIALOG_ANSWER:-}" \
   DRIVE_BACKUP_REMOTE="${REMOTE_OVERRIDE:-$SRC/}" \
   DRIVE_BACKUP_VOLUMES="$VOLS" \
   DRIVE_BACKUP_DISK="${DISK_OVERRIDE:-TestDisk}" \
@@ -67,6 +84,13 @@ assert_count()   {
   [[ $n -eq $2 ]] || fail "${1#$TMP/} has $n files, expected $2"
 }
 assert_output()  { grep -q "$1" "$OUT" || fail "output does not contain: $1"; }
+assert_asked()     { grep -q "display dialog" "$CALLS" || fail "the prompt was not shown"; }
+assert_not_asked() { ! grep -q "display dialog" "$CALLS" || fail "the prompt was shown"; }
+asked_count()      { grep -c "display dialog" "$CALLS"; }
+assert_silent() {
+  [[ ! -s "$CALLS" ]] || fail "osascript was called: $(head -1 "$CALLS")"
+  [[ ! -s "$OUT" ]] || fail "script printed output: $(head -1 "$OUT")"
+}
 assert_others_untouched() {
   assert_content "$DISK/photos/keep.jpg" "mine"
   assert_content "$DISK/top-level.txt" "top"
@@ -227,6 +251,96 @@ test_11_step_two_skipped_when_step_one_fails() {
   assert_content "$BASE/current/budget.csv" "budget"
   assert_count "$BASE/archive" 0
   assert_no_path "$TMP/lock"
+}
+
+test_12_auto_stops_silently_when_disk_missing() {
+  DISK_OVERRIDE=NoSuchDisk run_backup --auto
+  assert_status $? 0
+  assert_silent
+  assert_no_path "$VOLS/NoSuchDisk"
+}
+
+test_13_auto_start_runs_backup() {
+  DIALOG_ANSWER=Start run_backup --auto
+  assert_status $? 0
+  assert_asked
+  assert_content "$BASE/current/budget.csv" "budget"
+  grep -q "Safe to eject" "$CALLS" || fail "no 'Safe to eject' notification"
+  ! grep -q "Transferred:" "$OUT" || fail "live progress went to the launchd log"
+  assert_file "$BASE/.last-asked"
+  assert_no_path "$TMP/lock"
+  assert_others_untouched
+}
+
+test_14_auto_skip_does_not_back_up() {
+  DIALOG_ANSWER=Skip run_backup --auto
+  assert_status $? 0
+  assert_asked
+  assert_no_path "$BASE/current"
+  assert_no_path "$TMP/lock"
+}
+
+test_15_auto_no_answer_does_not_back_up() {
+  DIALOG_ANSWER=none run_backup --auto
+  assert_status $? 0
+  assert_asked
+  assert_no_path "$BASE/current"
+}
+
+test_16_auto_asks_once_in_quiet_period() {
+  DIALOG_ANSWER=Skip run_backup --auto
+  : > "$CALLS"
+  DIALOG_ANSWER=Start run_backup --auto
+  assert_status $? 0
+  assert_silent
+  assert_no_path "$BASE/current"
+}
+
+test_17_auto_asks_again_after_quiet_period() {
+  DIALOG_ANSWER=Skip run_backup --auto
+  touch -t 202001010000 "$BASE/.last-asked"   # pretend it asked long ago
+  : > "$CALLS"
+  DIALOG_ANSWER=Start run_backup --auto
+  assert_status $? 0
+  (( $(asked_count) == 1 )) || fail "expected 1 prompt, got $(asked_count)"
+  assert_content "$BASE/current/budget.csv" "budget"
+}
+
+test_18_auto_stops_silently_when_backup_running() {
+  mkdir "$TMP/lock"
+  DIALOG_ANSWER=Start run_backup --auto
+  assert_status $? 0
+  assert_silent
+  assert_no_path "$BASE/current"
+}
+
+test_19_manual_run_never_asks() {
+  DIALOG_ANSWER=Skip run_backup
+  assert_status $? 0
+  assert_not_asked
+  assert_content "$BASE/current/budget.csv" "budget"
+  DIALOG_ANSWER=Skip run_backup
+  assert_not_asked
+}
+
+test_20_install_writes_valid_job() {
+  local home="$TMP/home"
+  OUT="$TMP/out.txt"
+  HOME="$home" PATH="$STUBS:$PATH" "${SCRIPT:h}/install.sh" "My Disk" > "$OUT" 2>&1
+  assert_status $? 0
+  local job="$home/Library/LaunchAgents/com.jeremy.drive-backup.plist"
+  assert_file "$job"
+  plutil -lint -s "$job" || fail "job file is not a valid plist"
+  [[ "$(plutil -extract EnvironmentVariables.DRIVE_BACKUP_DISK raw "$job")" == "My Disk" ]] \
+    || fail "wrong disk name in job file"
+  [[ "$(plutil -extract ProgramArguments.0 raw "$job")" == "$SCRIPT" ]] \
+    || fail "wrong script path in job file"
+  [[ "$(plutil -extract ProgramArguments.1 raw "$job")" == "--auto" ]] \
+    || fail "job does not use --auto"
+  [[ "$(plutil -extract StartOnMount raw "$job")" == "true" ]] \
+    || fail "job does not start on mount"
+  HOME="$home" PATH="$STUBS:$PATH" "${SCRIPT:h}/install.sh" --uninstall > "$OUT" 2>&1
+  assert_no_path "$job"
 }
 
 # ---------------------------------------------------------------------------

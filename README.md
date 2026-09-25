@@ -107,9 +107,48 @@ Show what would change, but copy nothing:
 
 If a backup stops for any reason, run it again. rclone continues where it stopped.
 
+## Automatic backup when the disk is connected
+
+A launchd job can offer a backup each time you connect the disk. launchd is the macOS service that starts programs.
+
+Install it with your disk name:
+
+```bash
+./install.sh "MyDisk"
+```
+
+When you connect the disk, this prompt appears:
+
+> **Google Drive backup**
+> Back up Google Drive to MyDisk now?
+> [Skip] [Start]
+
+- Click **Start** to run the backup. Wait for the "Safe to eject" notification.
+- Click **Skip** to do nothing.
+- If you do not answer within 60 seconds, the script skips the backup.
+
+The prompt appears at most once in 12 hours. This is necessary because the job starts when *any* disk mounts, such as a USB stick, an installer, or Time Machine. To back up again sooner, run `./drive-backup.sh` by hand.
+
+The job writes a short log to `~/Library/Logs/drive-backup.log`. The detailed rclone log stays on the external disk.
+
+To remove the job:
+
+```bash
+./install.sh --uninstall
+```
+
+### macOS permissions
+
+The first time, macOS may ask for permission. Click **Allow**.
+
+- **Access to files on a removable volume.** Without this, the script cannot write to the disk.
+- **Notifications.** macOS shows the notifications under **Script Editor**. If none appear, turn them on in **System Settings → Notifications → Script Editor**.
+
+If you move the repository folder, run `./install.sh` again. The job stores the full path to the script.
+
 ## Tests
 
-The tests run the real script. A local folder stands in for Google Drive, and a second folder stands in for the external disk. They need rclone, but no Google account, internet, or disk.
+The tests run the real script. A local folder stands in for Google Drive, and a second folder stands in for the external disk. They need rclone, but no Google account, internet, or disk. They do not show notifications or prompts, and they do not change launchd.
 
 ```bash
 ./test.sh
@@ -126,6 +165,11 @@ The tests check these points:
 7. `--dry-run` changes nothing.
 8. A run for one folder changes only that folder.
 9. After an error in step 1, step 2 does not run.
+10. In `--auto` mode, the script stops with no message when the disk is not connected, or when a backup is running.
+11. In `--auto` mode, **Start** runs the backup. **Skip** and no answer do not.
+12. In `--auto` mode, the prompt appears at most once in 12 hours.
+13. Manual runs never show the prompt.
+14. `install.sh` writes a valid launchd job, and `--uninstall` removes it.
 
 ## Check the backup
 
