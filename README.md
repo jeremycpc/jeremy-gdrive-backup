@@ -53,6 +53,7 @@ brew install rclone
 2. Go to **APIs & Services → Library**. Enable the **Google Drive API**.
 3. Set up the **OAuth consent screen**. Select **External**. Add yourself as a test user.
 4. Click **Publish app**. If you skip this step, Google stops the access every 7 days.
+   Google needs a home page, a privacy policy, and terms of service first. The `docs/` folder holds these pages. GitHub Pages serves them at https://jeremycpc.github.io/jeremy-gdrive-backup/.
 5. Go to **Credentials → Create credentials → OAuth client ID**. Select **Desktop app**.
 6. Copy the client ID and the client secret.
 
