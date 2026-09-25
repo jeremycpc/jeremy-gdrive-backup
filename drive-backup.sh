@@ -12,7 +12,10 @@
 
 # Change DISK_NAME to your disk name, or set DRIVE_BACKUP_DISK in your shell.
 DISK_NAME="${DRIVE_BACKUP_DISK:-MyDisk}"
-REMOTE="gdrive:"
+# The other DRIVE_BACKUP_* settings exist for the tests. Normal use needs no change.
+REMOTE="${DRIVE_BACKUP_REMOTE:-gdrive:}"
+VOLUMES="${DRIVE_BACKUP_VOLUMES:-/Volumes}"
+LOCK="${DRIVE_BACKUP_LOCK:-/tmp/drive-backup.lock}"
 
 DRY_RUN=()
 if [[ "$1" == "--dry-run" ]]; then
@@ -20,13 +23,12 @@ if [[ "$1" == "--dry-run" ]]; then
   shift
 fi
 
-DISK="/Volumes/$DISK_NAME"
+DISK="$VOLUMES/$DISK_NAME"
 BASE="$DISK/drive-backup"
 FOLDER="${1:-}"
-STAMP=$(date +%Y-%m-%d_%H%M)
+STAMP=$(date +%Y-%m-%d_%H%M%S)
 LOG_DIR="$BASE/logs"
 LOG="$LOG_DIR/$STAMP.log"
-LOCK="/tmp/drive-backup.lock"
 
 notify() {
   osascript -e "display notification \"$2\" with title \"$1\""
