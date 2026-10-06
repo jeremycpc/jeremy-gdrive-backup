@@ -79,11 +79,15 @@ trap 'rmdir "$LOCK"' EXIT
 
 # In --auto mode, ask before the backup starts.
 if (( AUTO )); then
-  mkdir -p "$BASE"
-  touch "$LAST_ASKED"
+  mkdir -p "$BASE" 2>/dev/null
+  touch "$LAST_ASKED" 2>/dev/null
   answer=$(osascript -e "display dialog \"Back up Google Drive to $DISK_NAME now?\" \
     with title \"Google Drive backup\" buttons {\"Skip\", \"Start\"} \
     default button \"Start\" giving up after $PROMPT_SECONDS" 2>/dev/null)
+  # macOS can block the first write to the disk until you allow access in its
+  # own prompt. So write the marker again after the answer.
+  mkdir -p "$BASE" 2>/dev/null
+  touch "$LAST_ASKED" 2>/dev/null || echo "$(date): could not write $LAST_ASKED"
   if [[ "$answer" != *"button returned:Start"* || "$answer" == *"gave up:true"* ]]; then
     echo "$(date): backup skipped."
     exit 0

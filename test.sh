@@ -64,7 +64,7 @@ teardown() {
 # Run the backup script against the sandbox. Output goes to $OUT.
 run_backup() {
   OUT="$TMP/out.txt"
-  PATH="$STUBS:$PATH" CALLS="$CALLS" DIALOG_ANSWER="${DIALOG_ANSWER:-}" \
+  PATH="$STUBS:$PATH" CALLS="$CALLS" DIALOG_ANSWER="${DIALOG_ANSWER:-}" TOUCH_FLAG="${TOUCH_FLAG:-}" \
   DRIVE_BACKUP_REMOTE="${REMOTE_OVERRIDE:-$SRC/}" \
   DRIVE_BACKUP_VOLUMES="$VOLS" \
   DRIVE_BACKUP_DISK="${DISK_OVERRIDE:-TestDisk}" \
@@ -346,6 +346,23 @@ test_17_auto_asks_again_after_quiet_period() {
   assert_status $? 0
   (( $(asked_count) == 1 )) || fail "expected 1 prompt, got $(asked_count)"
   assert_content "$BASE/current/budget.csv" "budget"
+}
+
+test_17b_marker_written_after_answer_when_first_write_blocked() {
+  # Stand-in for macOS blocking the first write, before you click Allow.
+  cat > "$STUBS/touch" <<'STUB'
+#!/bin/sh
+if [ ! -e "$TOUCH_FLAG" ]; then : > "$TOUCH_FLAG"; echo "touch: Operation not permitted" >&2; exit 1; fi
+exec /usr/bin/touch "$@"
+STUB
+  chmod +x "$STUBS/touch"
+  TOUCH_FLAG="$TMP/touch-blocked-once" DIALOG_ANSWER=Skip run_backup --auto
+  assert_status $? 0
+  assert_file "$TMP/touch-blocked-once"
+  assert_file "$BASE/.last-asked"
+  : > "$CALLS"
+  TOUCH_FLAG="$TMP/touch-blocked-once" DIALOG_ANSWER=Start run_backup --auto
+  assert_silent
 }
 
 test_18_auto_stops_silently_when_backup_running() {
