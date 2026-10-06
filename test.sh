@@ -204,6 +204,17 @@ test_08_other_disk_folders_untouched_after_all_runs() {
   [[ "$top" == "drive-backup photos top-level.txt " ]] || fail "disk top level changed: $top"
 }
 
+test_08b_finder_files_stay_out_of_archive() {
+  run_backup
+  print "finder" > "$BASE/current/Docs/.DS_Store"
+  print "finder" > "$BASE/current/.DS_Store"
+  sleep 1
+  run_backup
+  assert_status $? 0
+  assert_count "$BASE/archive" 0
+  assert_file "$BASE/current/Docs/.DS_Store"
+}
+
 test_09_dry_run_changes_nothing() {
   run_backup
   rm "$SRC/budget.csv"
@@ -341,6 +352,29 @@ test_20_install_writes_valid_job() {
     || fail "job does not start on mount"
   HOME="$home" PATH="$STUBS:$PATH" "${SCRIPT:h}/install.sh" --uninstall > "$OUT" 2>&1
   assert_no_path "$job"
+}
+
+test_21_second_run_on_hfs_disk_changes_nothing() {
+  # Google Drive keeps file times in milliseconds. Mac OS Extended keeps
+  # seconds. A real HFS+ disk image checks that the second run sees no change.
+  local img="$TMP/hfs.dmg" mnt="$VOLS/HfsDisk"
+  hdiutil create -quiet -size 20m -fs HFS+ -volname HfsDisk "$img" \
+    || { fail "could not create HFS+ image"; return; }
+  mkdir -p "$mnt"
+  hdiutil attach -quiet -nobrowse -mountpoint "$mnt" "$img" \
+    || { fail "could not mount HFS+ image"; return; }
+  touch -d 2025-07-29T09:50:25.607 "$SRC/budget.csv" "$SRC/Docs/notes.docx"
+
+  DISK_OVERRIDE=HfsDisk run_backup
+  sleep 1   # each run gets its own log file, named to the second
+  DISK_OVERRIDE=HfsDisk run_backup
+  assert_status $? 0
+  local log=$(ls -t "$mnt"/drive-backup/logs/*.log | head -1)
+  ! grep -qE "Copied|Updated modification time" "$log" \
+    || fail "second run changed files: $(grep -E 'Copied|Updated' "$log" | head -1)"
+  assert_count "$mnt/drive-backup/archive" 0
+
+  hdiutil detach -quiet "$mnt"
 }
 
 # ---------------------------------------------------------------------------

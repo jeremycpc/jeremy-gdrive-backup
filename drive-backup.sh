@@ -17,7 +17,7 @@
 #   drive-backup/logs/     one log file per run
 
 # Change DISK_NAME to your disk name, or set DRIVE_BACKUP_DISK in your shell.
-DISK_NAME="${DRIVE_BACKUP_DISK:-MyDisk}"
+DISK_NAME="${DRIVE_BACKUP_DISK:-jeremy-backup}"
 # The other DRIVE_BACKUP_* settings exist for the tests. Normal use needs no change.
 REMOTE="${DRIVE_BACKUP_REMOTE:-gdrive:}"
 VOLUMES="${DRIVE_BACKUP_VOLUMES:-/Volumes}"
@@ -96,6 +96,15 @@ if ! rclone lsd "$REMOTE" >/dev/null 2>&1; then
   exit 1
 fi
 
+# Mac OS Extended (HFS+) and exFAT disks store file times to the second, but
+# Google Drive uses milliseconds. Without --modify-window every file looks
+# changed on every run, and Google Docs (which have no checksum) download again.
+TIME_WINDOW=(--modify-window 1s)
+
+# Finder creates .DS_Store in each folder you open. Ignore them, so step 2
+# does not move them into the archive.
+IGNORE=(--exclude .DS_Store)
+
 # Show live progress only in a Terminal. Under launchd it would fill the log.
 PROGRESS=()
 [[ -t 1 ]] && PROGRESS=(--progress)
@@ -106,6 +115,7 @@ notify "Drive backup started" "Do not eject $DISK_NAME."
 # Step 1: download new and changed files. Changed files are replaced.
 caffeinate -i rclone copy "$REMOTE$FOLDER" "$BASE/current/$FOLDER" \
   "${DRY_RUN[@]}" \
+  "${TIME_WINDOW[@]}" "${IGNORE[@]}" \
   --log-file "$LOG" --log-level INFO \
   "${PROGRESS[@]}"
 STATUS=$?
@@ -117,6 +127,7 @@ if [[ $STATUS -eq 0 ]]; then
     "${DRY_RUN[@]}" \
     --backup-dir "$BASE/archive/$FOLDER" \
     --suffix "-deleted-$STAMP" --suffix-keep-extension \
+    "${TIME_WINDOW[@]}" "${IGNORE[@]}" \
     --log-file "$LOG" --log-level INFO \
     "${PROGRESS[@]}"
   STATUS=$?
