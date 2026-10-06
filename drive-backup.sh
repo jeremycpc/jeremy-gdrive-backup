@@ -14,6 +14,7 @@
 # Result on the disk:
 #   drive-backup/current/  exact copy of Google Drive
 #   drive-backup/archive/  files deleted from Drive, renamed with the backup date
+#                          (renamed and moved files are renamed in current instead)
 #   drive-backup/logs/     one log file per run
 
 # Change DISK_NAME to your disk name, or set DRIVE_BACKUP_DISK in your shell.
@@ -112,21 +113,27 @@ PROGRESS=()
 mkdir -p "$BASE/current" "$BASE/archive" "$LOG_DIR"
 notify "Drive backup started" "Do not eject $DISK_NAME."
 
-# Step 1: download new and changed files. Changed files are replaced.
-caffeinate -i rclone copy "$REMOTE$FOLDER" "$BASE/current/$FOLDER" \
+# Step 1: follow renames and moves, download new files, archive deleted files.
+# --track-renames finds a file with the same checksum under a new name or folder,
+#   and renames the copy on the disk. (Google Docs have no checksum, so a renamed
+#   Doc still goes to the archive and downloads again under the new name.)
+# --ignore-existing leaves files that exist on both sides for step 2.
+# rclone does not archive anything if the Drive listing has errors.
+caffeinate -i rclone sync "$REMOTE$FOLDER" "$BASE/current/$FOLDER" \
   "${DRY_RUN[@]}" \
+  --track-renames --ignore-existing \
+  --backup-dir "$BASE/archive/$FOLDER" \
+  --suffix "-deleted-$STAMP" --suffix-keep-extension \
   "${TIME_WINDOW[@]}" "${IGNORE[@]}" \
   --log-file "$LOG" --log-level INFO \
   "${PROGRESS[@]}"
 STATUS=$?
 
-# Step 2: move files deleted from Drive into the archive, with the date in the name.
-# Only runs if step 1 had no errors. rclone also skips it if the Drive listing fails.
+# Step 2: download changed files. They replace the old copy, with no archive copy.
+# Only runs if step 1 had no errors.
 if [[ $STATUS -eq 0 ]]; then
-  caffeinate -i rclone sync "$REMOTE$FOLDER" "$BASE/current/$FOLDER" \
+  caffeinate -i rclone copy "$REMOTE$FOLDER" "$BASE/current/$FOLDER" \
     "${DRY_RUN[@]}" \
-    --backup-dir "$BASE/archive/$FOLDER" \
-    --suffix "-deleted-$STAMP" --suffix-keep-extension \
     "${TIME_WINDOW[@]}" "${IGNORE[@]}" \
     --log-file "$LOG" --log-level INFO \
     "${PROGRESS[@]}"

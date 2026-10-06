@@ -176,6 +176,37 @@ test_06_deleted_file_moves_to_archive_with_date() {
   assert_others_untouched
 }
 
+test_06b_renamed_and_moved_files_update_current() {
+  run_backup
+  mv "$SRC/Docs/notes.docx" "$SRC/Docs/notes-final.docx"     # rename
+  mkdir -p "$SRC/Archive2024"
+  mv "$SRC/Photos/beach.jpg" "$SRC/Archive2024/beach.jpg"     # move to another folder
+  sleep 1
+  run_backup
+  assert_status $? 0
+  assert_content "$BASE/current/Docs/notes-final.docx" "notes v1"
+  assert_content "$BASE/current/Archive2024/beach.jpg" "beach"
+  assert_no_path "$BASE/current/Docs/notes.docx"
+  assert_no_path "$BASE/current/Photos/beach.jpg"
+  assert_count "$BASE/archive" 0
+  local log=$(ls -t "$BASE"/logs/*.log | head -1)
+  grep -q 'Renamed from' "$log" || fail "rclone did not rename on the disk"
+  ! grep -qE 'notes-final.docx: Copied|beach.jpg: Copied' "$log" \
+    || fail "a renamed file was downloaded again"
+}
+
+test_06c_renamed_and_changed_file_is_archived() {
+  run_backup
+  rm "$SRC/Docs/notes.docx"
+  print "notes v2, longer" > "$SRC/Docs/notes-final.docx"   # new name and new content
+  sleep 1
+  run_backup
+  assert_status $? 0
+  assert_content "$BASE/current/Docs/notes-final.docx" "notes v2, longer"
+  assert_no_path "$BASE/current/Docs/notes.docx"
+  assert_count "$BASE/archive/Docs" 1
+}
+
 test_07_same_name_deleted_twice_keeps_both() {
   run_backup
   rm "$SRC/Docs/notes.docx"

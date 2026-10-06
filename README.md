@@ -10,10 +10,12 @@ rclone downloads straight from Google to the external disk. The internal disk of
 2. It checks that rclone can reach Google Drive.
 3. It stops if another backup is already running.
 4. It shows a "Backup started" notification.
-5. It downloads new and changed files into `current`. Changed files replace the old copy.
-6. It moves files that you deleted from Drive into `archive`. It adds the backup date to each file name.
-7. It writes a log file on the external disk.
-8. It shows a "Safe to eject" notification, or an error notification.
+5. It renames or moves files in `current` that you renamed or moved in Drive. It does not download them again.
+6. It downloads new files into `current`.
+7. It moves files that you deleted from Drive into `archive`. It adds the backup date to each file name.
+8. It downloads changed files into `current`. They replace the old copy.
+9. It writes a log file on the external disk.
+10. It shows a "Safe to eject" notification, or an error notification.
 
 The script keeps the Mac awake while it runs. Keep the lid open during a long backup.
 
@@ -36,7 +38,10 @@ Google Docs, Sheets, and Slides download as `.docx`, `.xlsx`, and `.pptx` files.
 ## Things to know
 
 - The script never deletes files from the disk. Delete old files from `archive` by hand in Finder.
-- A renamed or moved file in Drive goes to `archive` under its old name. `current` gets the new name.
+- Only deleted files go to `archive`. This includes files in the Drive Trash, and files in a deleted folder.
+- A renamed or moved file is renamed in `current`. Nothing goes to `archive`. rclone finds these files by their checksum.
+- Google Docs, Sheets, and Slides have no checksum. A renamed Doc goes to `archive` under its old name, and `current` gets it under the new name.
+- A file that you rename **and** change before the next backup also goes to `archive`, because its checksum changed.
 - Changed files keep no old copy. Use the version history in Google Drive to get an earlier version.
 - Files from other apps, such as Lucidchart diagrams, cannot be backed up. Google Drive holds only a link to them. The log shows a notice for each one, and the backup continues. Export these files from the app itself.
 - "Shared with me" files and shared drives are not part of the backup.
@@ -160,16 +165,20 @@ The tests check these points:
 2. The first run copies all files into `current`.
 3. A changed file replaces the old copy, and nothing goes to `archive`.
 4. A deleted file moves to `archive` with the date in its name.
-5. Two deleted files with the same name both stay in `archive`.
-6. Other folders on the disk never change.
-7. `--dry-run` changes nothing.
-8. A run for one folder changes only that folder.
-9. After an error in step 1, step 2 does not run.
-10. In `--auto` mode, the script stops with no message when the disk is not connected, or when a backup is running.
-11. In `--auto` mode, **Start** runs the backup. **Skip** and no answer do not.
-12. In `--auto` mode, the prompt appears at most once in 12 hours.
-13. Manual runs never show the prompt.
-14. `install.sh` writes a valid launchd job, and `--uninstall` removes it.
+5. A renamed or moved file is renamed in `current`, not downloaded again, and nothing goes to `archive`.
+6. A file with a new name and new content goes to `archive`.
+7. Two deleted files with the same name both stay in `archive`.
+8. Other folders on the disk never change.
+9. Finder's `.DS_Store` files never go to `archive`.
+10. `--dry-run` changes nothing.
+11. A run for one folder changes only that folder.
+12. After an error in step 1, step 2 does not run.
+13. On a Mac OS Extended disk, a second run changes nothing. This disk format stores file times to the second only.
+14. In `--auto` mode, the script stops with no message when the disk is not connected, or when a backup is running.
+15. In `--auto` mode, **Start** runs the backup. **Skip** and no answer do not.
+16. In `--auto` mode, the prompt appears at most once in 12 hours.
+17. Manual runs never show the prompt.
+18. `install.sh` writes a valid launchd job, and `--uninstall` removes it.
 
 ## Check the backup
 
