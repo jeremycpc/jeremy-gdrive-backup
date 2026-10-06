@@ -1,189 +1,131 @@
 # jeremy-gdrive-backup
 
-This script backs up Google Drive to an external disk with [rclone](https://rclone.org).
+This script backs up Google Drive to the external disk `jeremy-backup` with [rclone](https://rclone.org).
 
-rclone downloads straight from Google to the external disk. The internal disk of the Mac holds no copy of the files.
+rclone downloads straight from Google to the disk. The Mac's internal disk holds no copy. rclone has read-only access, so it can never change your Drive.
 
-## What the script does
+## Rules
 
-1. It checks that rclone is installed and that the disk is connected.
-2. It checks that rclone can reach Google Drive.
-3. It stops if another backup is already running.
-4. It shows a "Backup started" notification.
-5. It renames or moves files in `current` that you renamed or moved in Drive. It does not download them again.
-6. It downloads new files into `current`.
-7. It moves files that you deleted from Drive into `archive`. It adds the backup date to each file name.
-8. It downloads changed files into `current`. They replace the old copy.
-9. It writes a log file on the external disk.
-10. It shows a "Safe to eject" notification, or an error notification.
-
-The script keeps the Mac awake while it runs. Keep the lid open during a long backup.
-
-## Result on the disk
+### Where files go
 
 ```
-/Volumes/<disk>/
+/Volumes/jeremy-backup/
 └── drive-backup/
-    ├── current/    exact copy of Google Drive
-    ├── archive/    deleted files, for example notes-deleted-2026-09-25_140312.docx
-    └── logs/       one log file per run
+    ├── current/   exact copy of Google Drive
+    ├── archive/   files deleted from Drive
+    └── logs/      one log file per backup
 ```
 
-The script writes only inside `drive-backup`. Other folders on the disk stay untouched.
+The script writes only inside `drive-backup`. Other folders on the disk never change.
 
-The date in an archived file name is the date of the backup that found the deletion. It is not the date that you deleted the file.
+### What each change in Drive does
 
-Google Docs, Sheets, and Slides download as `.docx`, `.xlsx`, and `.pptx` files.
+| In Google Drive, you… | Result on the disk |
+|---|---|
+| Add a file | It goes into `current` |
+| Change a file | The new version replaces the old one in `current`. No old copy is kept |
+| Rename a file, or move it to another folder | It is renamed or moved in `current`. Nothing goes to `archive` |
+| Delete a file, or move it to the Trash | It moves from `current` to `archive` |
+| Delete a folder | Every file in it moves to `archive` |
 
-## Things to know
+Two exceptions send a renamed file to `archive` under its old name:
 
-- The script never deletes files from the disk. Delete old files from `archive` by hand in Finder.
-- Only deleted files go to `archive`. This includes files in the Drive Trash, and files in a deleted folder.
-- A renamed or moved file is renamed in `current`. Nothing goes to `archive`. rclone finds these files by their checksum.
-- Google Docs, Sheets, and Slides have no checksum. A renamed Doc goes to `archive` under its old name, and `current` gets it under the new name.
-- A file that you rename **and** change before the next backup also goes to `archive`, because its checksum changed.
-- Changed files keep no old copy. Use the version history in Google Drive to get an earlier version.
-- Files from other apps, such as Lucidchart diagrams, cannot be backed up. Google Drive holds only a link to them. The log shows a notice for each one, and the backup continues. Export these files from the app itself.
-- "Shared with me" files and shared drives are not part of the backup.
+1. A renamed Google Doc, Sheet, or Slides file. These have no checksum, so rclone cannot match them.
+2. A file that you rename **and** change before the next backup.
+
+### Archived file names
+
+```
+archive/<folder path>/<name>-deleted-<YYYY-MM-DD>_<HHMMSS>.<extension>
+```
+
+For example, `notes.docx` becomes `notes-deleted-2026-10-06_201445.docx`.
+
+- The time is when the backup started, in local time. It is not when you deleted the file.
+- The extension stays at the end, so the file still opens normally.
+- The script never deletes anything from `archive`. Delete old files by hand in Finder.
+
+### What the backup does not include
+
+- Google Docs, Sheets, and Slides download as `.docx`, `.xlsx`, and `.pptx`.
+- Files from other apps, such as Lucidchart, cannot be downloaded. Export them from the app itself.
+- "Shared with me" files and shared drives are not included.
+- Google Photos is separate from Drive. Use Google Takeout for it.
+- Two files with the same name in one folder: rclone copies only one. Rename them in Drive.
+
+## Run a backup
+
+### By hand
+
+1. Connect the disk.
+2. Run one of these commands:
+
+   ```bash
+   cd ~/work/jeremy-gdrive-backup
+   ./drive-backup.sh                    # whole Drive
+   ./drive-backup.sh "Folder/Subfolder" # one folder only
+   ./drive-backup.sh --dry-run          # show what would change, copy nothing
+   ```
+
+3. Keep the lid open. Wait for the "Safe to eject" notification.
+4. Eject the disk in Finder.
+
+If a backup stops for any reason, run it again. It continues where it stopped.
+
+The first backup copies everything, about 19 GB. Later backups copy only new and changed files.
+
+### Automatically when the disk is connected
+
+1. Install the launchd job once:
+
+   ```bash
+   ./install.sh "jeremy-backup"
+   ```
+
+2. Connect the disk. A prompt asks "Back up Google Drive to jeremy-backup now?"
+3. Click **Start**, or **Skip**. No answer in 60 seconds means Skip.
+
+The prompt appears at most once in 12 hours. To back up again sooner, run the script by hand. To remove the job, run `./install.sh --uninstall`.
+
+The first time, macOS asks for access to the removable disk. Click **Allow**. Notifications appear under **Script Editor** in System Settings.
+
+### Check the backup
+
+```bash
+rclone check gdrive: "/Volumes/jeremy-backup/drive-backup/current" --one-way
+```
+
+This compares every file on the disk with Google Drive.
+
+### Logs
+
+- Each backup writes a detailed log to `drive-backup/logs/` on the disk.
+- The automatic job also writes a short log to `~/Library/Logs/drive-backup.log`.
 
 ## One-time setup
 
-### 1. Install rclone
+This setup is already done on this Mac. Repeat it only on a new Mac.
 
-```bash
-brew install rclone
-```
+1. Install rclone: `brew install rclone`.
+2. In the Google Cloud Console, create a project. Enable the **Google Drive API**.
+3. Set up the OAuth consent screen as **External**.
+4. Under **Branding**, add the pages from this repository. GitHub Pages serves them from `docs/`:
+   - Home page: https://jeremycpc.github.io/jeremy-gdrive-backup/
+   - Privacy policy: https://jeremycpc.github.io/jeremy-gdrive-backup/privacy.html
+   - Terms of service: https://jeremycpc.github.io/jeremy-gdrive-backup/terms.html
+   - Authorized domain: `jeremycpc.github.io`
+5. Under **Audience**, click **Publish app**. Without this, access expires every 7 days. Ignore the message "Your app requires verification."
+6. Create an OAuth client of type **Desktop app**. Copy the client ID and secret.
+7. Run `rclone config`. Create a remote named `gdrive`, type `drive`, with the **drive.readonly** scope.
+8. In the browser, Google shows "Google hasn't verified this app." Click **Advanced**, then **Go to rclone-backup (unsafe)**.
+9. Test it with `rclone lsd gdrive:`. Then delete the downloaded client JSON file.
 
-### 2. Create a Google client ID
-
-1. Go to console.cloud.google.com. Create a project named `rclone`.
-2. Go to **APIs & Services → Library**. Enable the **Google Drive API**.
-3. Set up the **OAuth consent screen**. Select **External**. Add yourself as a test user.
-4. Click **Publish app**. If you skip this step, Google stops the access every 7 days.
-   Google then says "Your app requires verification." Ignore this, and do not submit the app for review. The access works without verification.
-   Google needs a home page, a privacy policy, and terms of service first. The `docs/` folder holds these pages. GitHub Pages serves them at https://jeremycpc.github.io/jeremy-gdrive-backup/.
-5. Go to **Credentials → Create credentials → OAuth client ID**. Select **Desktop app**.
-6. Copy the client ID and the client secret.
-
-### 3. Connect rclone to Google Drive
-
-1. Run `rclone config`.
-2. Create a new remote named `gdrive`, of type `drive`.
-3. Paste the client ID and the client secret.
-4. Select the **drive.readonly** scope. rclone can then never change your Drive.
-5. Sign in to Google in the browser. Google shows "Google hasn't verified this app." Click **Advanced**, then **Go to rclone-backup (unsafe)**. Approve the access. The warning only means that Google has not reviewed the app.
-6. Test the connection with `rclone lsd gdrive:`.
-
-### 4. Set the disk name
-
-Find the disk name:
-
-```bash
-ls /Volumes
-```
-
-Then change `DISK_NAME` at the top of `drive-backup.sh`. You can also set `DRIVE_BACKUP_DISK` in your shell instead.
-
-### 5. Make the script runnable
-
-```bash
-chmod +x drive-backup.sh
-```
-
-## Usage
-
-Back up the whole Drive:
-
-```bash
-./drive-backup.sh
-```
-
-Back up one folder only:
-
-```bash
-./drive-backup.sh "Photos"
-```
-
-Show what would change, but copy nothing:
-
-```bash
-./drive-backup.sh --dry-run
-```
-
-If a backup stops for any reason, run it again. rclone continues where it stopped.
-
-## Automatic backup when the disk is connected
-
-A launchd job can offer a backup each time you connect the disk. launchd is the macOS service that starts programs.
-
-Install it with your disk name:
-
-```bash
-./install.sh "MyDisk"
-```
-
-When you connect the disk, this prompt appears:
-
-> **Google Drive backup**
-> Back up Google Drive to MyDisk now?
-> [Skip] [Start]
-
-- Click **Start** to run the backup. Wait for the "Safe to eject" notification.
-- Click **Skip** to do nothing.
-- If you do not answer within 60 seconds, the script skips the backup.
-
-The prompt appears at most once in 12 hours. This is necessary because the job starts when *any* disk mounts, such as a USB stick, an installer, or Time Machine. To back up again sooner, run `./drive-backup.sh` by hand.
-
-The job writes a short log to `~/Library/Logs/drive-backup.log`. The detailed rclone log stays on the external disk.
-
-To remove the job:
-
-```bash
-./install.sh --uninstall
-```
-
-### macOS permissions
-
-The first time, macOS may ask for permission. Click **Allow**.
-
-- **Access to files on a removable volume.** Without this, the script cannot write to the disk.
-- **Notifications.** macOS shows the notifications under **Script Editor**. If none appear, turn them on in **System Settings → Notifications → Script Editor**.
-
-If you move the repository folder, run `./install.sh` again. The job stores the full path to the script.
+The access lasts until you remove it, or until it is unused for 6 months. To connect again, run `rclone config reconnect gdrive:`.
 
 ## Tests
-
-The tests run the real script. A local folder stands in for Google Drive, and a second folder stands in for the external disk. They need rclone, but no Google account, internet, or disk. They do not show notifications or prompts, and they do not change launchd.
 
 ```bash
 ./test.sh
 ```
 
-The tests check these points:
-
-1. The script stops when the disk is not connected, when Drive cannot be reached, or when another backup is running.
-2. The first run copies all files into `current`.
-3. A changed file replaces the old copy, and nothing goes to `archive`.
-4. A deleted file moves to `archive` with the date in its name.
-5. A renamed or moved file is renamed in `current`, not downloaded again, and nothing goes to `archive`.
-6. A file with a new name and new content goes to `archive`.
-7. Two deleted files with the same name both stay in `archive`.
-8. Other folders on the disk never change.
-9. Finder's `.DS_Store` files never go to `archive`.
-10. `--dry-run` changes nothing.
-11. A run for one folder changes only that folder.
-12. After an error in step 1, step 2 does not run.
-13. On a Mac OS Extended disk, a second run changes nothing. This disk format stores file times to the second only.
-14. In `--auto` mode, the script stops with no message when the disk is not connected, or when a backup is running.
-15. In `--auto` mode, **Start** runs the backup. **Skip** and no answer do not.
-16. In `--auto` mode, the prompt appears at most once in 12 hours.
-17. Manual runs never show the prompt.
-18. `install.sh` writes a valid launchd job, and `--uninstall` removes it.
-
-## Check the backup
-
-This command compares every file on the disk with Google Drive:
-
-```bash
-rclone check gdrive: "/Volumes/<disk>/drive-backup/current" --one-way
-```
+The tests run the real script against local folders. They need no Google account, internet, or disk. They cover each rule above, the automatic prompt, the installer, and a Mac OS Extended disk image.
