@@ -15,6 +15,16 @@ if ! command -v rclone >/dev/null 2>&1; then
   exit 1
 fi
 
+# Test 21 mounts a disk image, and every mount starts the real launchd job.
+# Hold the real backup lock while the tests run, so that job stops at once
+# and shows no prompt.
+REAL_LOCK=/tmp/drive-backup.lock
+if mkdir "$REAL_LOCK" 2>/dev/null; then
+  trap 'sleep 2; rmdir "$REAL_LOCK" 2>/dev/null' EXIT
+else
+  echo "Note: a real backup is running. The tests still run."
+fi
+
 # Create a fresh sandbox for each test.
 setup() {
   TMP=$(mktemp -d)
