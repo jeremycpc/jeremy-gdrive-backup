@@ -502,6 +502,29 @@ test_19e_progress_shows_checking_once_instead_of_repeats() {
   assert_output "a.pdf: Copied"
 }
 
+test_19f_progress_shows_long_checks_and_rename_matching() {
+  mkdir -p "$LOGS"
+  { print "=== Step 1 of 2: new files"
+    print "2026/01/01 23:59:30 INFO  :          0 B / 0 B, -, 0 B/s, ETA -"
+    print "2026/01/01 23:59:40 INFO  : Local file system at /x: Making map for --track-renames"
+    for t in 23:59:50 00:00:20 00:00:31 00:01:00 00:01:29 00:01:30 00:02:40; do
+      print "2026/01/02 $t INFO  :          0 B / 0 B, -, 0 B/s, ETA -"
+    done
+    print "2026/01/02 00:02:45 INFO  : Local file system at /x: Finished making map for --track-renames"
+    print "=== Backup complete"
+  } > "$LOGS/a.log"
+  run_progress
+  assert_status $? 0
+  assert_output "23:59:40  Matching renamed files..."
+  assert_output "00:02:45  Finished matching renamed files."
+  # Checking started 23:59:30, so full minutes pass at 00:00:30, 00:01:30, 00:02:30.
+  assert_output "00:00:31  Still checking files (1 min)"
+  assert_output "00:01:30  Still checking files (2 min)"
+  assert_output "00:02:40  Still checking files (3 min)"
+  (( $(grep -c "Still checking" "$OUT") == 3 )) || fail "expected 3 Still checking lines, got $(grep -c "Still checking" "$OUT")"
+  ! grep -q "Making map" "$OUT" || fail "progress shows the raw rclone line"
+}
+
 test_20_install_writes_valid_job() {
   local home="$TMP/home"
   OUT="$TMP/out.txt"

@@ -14,21 +14,28 @@ WAIT_SECONDS="${DRIVE_BACKUP_PROGRESS_WAIT:-10}"
 
 # Show the lines that matter: steps, progress, finished files, and errors.
 # rclone writes a progress line every 10 seconds. While it only checks files,
-# the line does not change, so show "Checking files..." once instead.
+# the line does not change. Then show "Checking files..." once, and
+# "Still checking files (N min)" each full minute after that.
 show() {
   awk '
     function clean(s) { sub(/^[0-9]+\/[0-9]+\/[0-9]+ /, "", s); sub(/ (INFO|NOTICE) +: +/, "  ", s); return s }
-    /^=== / { print; checking = 0; last = ""; fflush(); next }
+    function secs(s,   t) { split(substr(s, 12, 8), t, ":"); return t[1] * 3600 + t[2] * 60 + t[3] }
+    function out(s) { print s; fflush() }
+    function check_tick() {
+      if (!checking) { out("Checking files..."); checking = 1; since = secs($0); shown = 0; return }
+      mins = int((secs($0) - since + 86400) % 86400 / 60)
+      if (mins > shown) { shown = mins; out(substr($0, 12, 8) "  Still checking files (" mins " min)") }
+    }
+    /^=== / { out($0); checking = 0; last = ""; next }
+    /Making map for --track-renames/ { out(substr($0, 12, 8) "  Matching renamed files..."); next }
+    /Finished making map for --track-renames/ { out(substr($0, 12, 8) "  Finished matching renamed files."); next }
     / ETA / {
       key = $0; sub(/^[0-9\/]+ [0-9:]+ /, "", key)
-      if (key ~ / 0 B \/ 0 B/ || key == last) {
-        if (!checking) { print "Checking files..."; checking = 1; fflush() }
-        next
-      }
-      checking = 0; last = key; print clean($0); fflush(); next
+      if (key ~ / 0 B \/ 0 B/ || key == last) { check_tick(); next }
+      checking = 0; last = key; out(clean($0)); next
     }
     /Copied|Renamed from|Moved into backup dir|ERROR|There was nothing to transfer/ {
-      checking = 0; print clean($0); fflush()
+      checking = 0; out(clean($0))
     }'
 }
 

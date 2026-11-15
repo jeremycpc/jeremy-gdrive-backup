@@ -110,7 +110,9 @@ It shows the current step, each finished file, and any errors. While data moves,
 20:51:10    6.2 GiB / 19.3 GiB, 32%, 9.8 MiB/s, ETA 22m
 ```
 
-While rclone only compares files, it shows "Checking files..." once. Each step compares all files first, which takes about 1 minute.
+While rclone only compares files, it shows "Checking files...", then "Still checking files (N min)" once a minute. Each step compares all files first, which takes about 1 minute.
+
+After you rename or move files in Drive, it also shows "Matching renamed files...". rclone then reads those files on the disk to find them by checksum. This can take a few minutes, and nothing downloads during it.
 
 Press `Ctrl+C` to stop watching. This does not stop the backup.
 
