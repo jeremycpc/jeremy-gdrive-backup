@@ -34,7 +34,8 @@ setup() {
   print "top" > "$DISK/top-level.txt"
 
   # Stand-ins. osascript records each call in $CALLS and answers the prompt
-  # with $DIALOG_ANSWER: Start, Skip, or anything else for no answer.
+  # with $DIALOG_ANSWER: Start (Back up), Progress (Back up and show progress),
+  # Skip (Cancel), or anything else for no answer. open records its arguments.
   # caffeinate only runs the command.
   CALLS="$TMP/osascript-calls.txt"
   : > "$CALLS"
@@ -44,14 +45,16 @@ echo "$*" >> "$CALLS"
 case "$*" in
   *"display dialog"*)
     case "$DIALOG_ANSWER" in
-      Start) echo "button returned:Start, gave up:false" ;;
-      Skip)  echo "button returned:Skip, gave up:false" ;;
+      Start)    echo "button returned:Back up, gave up:false" ;;
+      Progress) echo "button returned:Back up and show progress, gave up:false" ;;
+      Skip)     echo "execution error: User canceled. (-128)" >&2; exit 1 ;;
       *)     echo "button returned:, gave up:true" ;;
     esac ;;
 esac
 exit 0
 STUB
   print '#!/bin/sh\nexit 0' > "$STUBS/launchctl"
+  print '#!/bin/sh\necho "open $*" >> "$CALLS"' > "$STUBS/open"
   print '#!/bin/sh\n[ "$1" = "-i" ] && shift\nexec "$@"' > "$STUBS/caffeinate"
   chmod +x "$STUBS"/*
 }
@@ -309,9 +312,28 @@ test_13_auto_start_runs_backup() {
   assert_content "$BASE/current/budget.csv" "budget"
   grep -q "Safe to eject" "$CALLS" || fail "no 'Safe to eject' notification"
   ! grep -q "Transferred:" "$OUT" || fail "live progress went to the launchd log"
+  ! grep -q "^open " "$CALLS" || fail "Terminal opened, but only Back up was clicked"
+  local log=$(ls -t "$BASE"/logs/*.log | head -1)
+  grep -q "^=== Step 1 of 2" "$log" || fail "log has no step 1 marker"
+  grep -q "^=== Step 2 of 2" "$log" || fail "log has no step 2 marker"
+  grep -q "^=== Backup complete" "$log" || fail "log has no end marker"
+  grep -qE 'INFO  : +[0-9.]+ [KMGT]?i?B / [0-9.]+ [KMGT]?i?B, [0-9-]+%?.*ETA' "$log" \
+    || fail "log has no one-line progress for progress.sh"
   assert_file "$BASE/.last-asked"
   assert_no_path "$TMP/lock"
   assert_others_untouched
+}
+
+test_13b_auto_progress_opens_terminal() {
+  DIALOG_ANSWER=Progress run_backup --auto
+  assert_status $? 0
+  assert_asked
+  assert_content "$BASE/current/budget.csv" "budget"
+  grep -q "^open -a Terminal ${SCRIPT:h}/progress.sh$" "$CALLS" \
+    || fail "Terminal did not open progress.sh"
+  local log=$(ls -t "$BASE"/logs/*.log | head -1)
+  grep -q "^=== Backup started" "$log" || fail "log was not created before Terminal opened"
+  (( $(ls "$BASE"/logs/*.log | wc -l) == 1 )) || fail "expected one log file"
 }
 
 test_14_auto_skip_does_not_back_up() {
@@ -380,6 +402,38 @@ test_19_manual_run_never_asks() {
   assert_content "$BASE/current/budget.csv" "budget"
   DIALOG_ANSWER=Skip run_backup
   assert_not_asked
+}
+
+test_19b_progress_shows_last_log_when_idle() {
+  run_backup
+  OUT="$TMP/out.txt"
+  DRIVE_BACKUP_DISK=TestDisk DRIVE_BACKUP_VOLUMES="$VOLS" DRIVE_BACKUP_LOCK="$TMP/lock" \
+    "${SCRIPT:h}/progress.sh" > "$OUT" 2>&1
+  assert_status $? 0
+  assert_output "No backup is running"
+  assert_output "=== Backup complete"
+  assert_output "budget.csv: Copied"
+}
+
+test_19c_progress_follows_running_backup_until_it_ends() {
+  local log="$BASE/logs/2026-01-01_000000.log"
+  mkdir -p "$BASE/logs" "$TMP/lock"
+  print "=== Step 1 of 2: new files" > "$log"
+  ( sleep 2
+    print "2026/01/01 00:00:05 INFO  : 1 GiB / 2 GiB, 50%, 10 MiB/s, ETA 1m" >> "$log"
+    print "2026/01/01 00:00:06 DEBUG : noise" >> "$log"
+    print "=== Backup complete" >> "$log"
+    sleep 1; rmdir "$TMP/lock" ) &
+  OUT="$TMP/out.txt"
+  DRIVE_BACKUP_DISK=TestDisk DRIVE_BACKUP_VOLUMES="$VOLS" DRIVE_BACKUP_LOCK="$TMP/lock" \
+    "${SCRIPT:h}/progress.sh" > "$OUT" 2>&1
+  assert_status $? 0
+  wait
+  assert_output "=== Step 1 of 2"
+  assert_output "50%, 10 MiB/s, ETA 1m"
+  assert_output "=== Backup complete"
+  assert_output "The backup has finished"
+  ! grep -q "noise" "$OUT" || fail "progress shows debug lines"
 }
 
 test_20_install_writes_valid_job() {

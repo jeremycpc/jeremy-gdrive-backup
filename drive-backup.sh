@@ -9,7 +9,9 @@
 # --auto is for the launchd job that runs when any disk mounts. In this mode:
 #   - If the backup disk is not connected, the script stops with no message.
 #   - If it asked in the last 12 hours, the script stops with no message.
-#   - Otherwise it asks "Start the backup now?". No answer in 60 seconds means Skip.
+#   - Otherwise it asks "Back up Google Drive now?" with three buttons:
+#     Cancel, Back up, and Back up and show progress. The last one opens
+#     progress.sh in a Terminal window. No answer in 60 seconds means Cancel.
 #
 # Result on the disk:
 #   drive-backup/current/  exact copy of Google Drive
@@ -25,6 +27,7 @@ VOLUMES="${DRIVE_BACKUP_VOLUMES:-/Volumes}"
 LOCK="${DRIVE_BACKUP_LOCK:-/tmp/drive-backup.lock}"
 QUIET_HOURS="${DRIVE_BACKUP_QUIET_HOURS:-12}"
 PROMPT_SECONDS="${DRIVE_BACKUP_PROMPT_SECONDS:-60}"
+SCRIPT_DIR="${0:A:h}"
 
 AUTO=0
 DRY_RUN=()
@@ -81,16 +84,25 @@ trap 'rmdir "$LOCK"' EXIT
 if (( AUTO )); then
   mkdir -p "$BASE" 2>/dev/null
   touch "$LAST_ASKED" 2>/dev/null
+  # A button named "Cancel" makes osascript fail with no output. That also skips.
   answer=$(osascript -e "display dialog \"Back up Google Drive to $DISK_NAME now?\" \
-    with title \"Google Drive backup\" buttons {\"Skip\", \"Start\"} \
-    default button \"Start\" giving up after $PROMPT_SECONDS" 2>/dev/null)
+    with title \"Google Drive backup\" \
+    buttons {\"Cancel\", \"Back up\", \"Back up and show progress\"} \
+    default button \"Back up\" giving up after $PROMPT_SECONDS" 2>/dev/null)
   # macOS can block the first write to the disk until you allow access in its
   # own prompt. So write the marker again after the answer.
   mkdir -p "$BASE" 2>/dev/null
   touch "$LAST_ASKED" 2>/dev/null || echo "$(date): could not write $LAST_ASKED"
-  if [[ "$answer" != *"button returned:Start"* || "$answer" == *"gave up:true"* ]]; then
+  choice="${${answer#button returned:}%%, gave up:*}"
+  if [[ "$answer" == *"gave up:true"* || ( "$choice" != "Back up" && "$choice" != "Back up and show progress" ) ]]; then
     echo "$(date): backup skipped."
     exit 0
+  fi
+  if [[ "$choice" == "Back up and show progress" ]]; then
+    # Create the log first, so progress.sh finds this backup's log.
+    mkdir -p "$LOG_DIR" 2>/dev/null
+    print "=== Backup started $(date)" >> "$LOG"
+    open -a Terminal "$SCRIPT_DIR/progress.sh"
   fi
 fi
 
@@ -110,12 +122,17 @@ TIME_WINDOW=(--modify-window 1s)
 # does not move them into the archive.
 IGNORE=(--exclude .DS_Store)
 
-# Show live progress only in a Terminal. Under launchd it would fill the log.
-PROGRESS=()
-[[ -t 1 ]] && PROGRESS=(--progress)
+# In a Terminal, show live progress. Otherwise write one progress line to the
+# log every 10 seconds, for progress.sh.
+if [[ -t 1 ]]; then
+  PROGRESS=(--progress)
+else
+  PROGRESS=(--stats 10s --stats-one-line)
+fi
 
 mkdir -p "$BASE/current" "$BASE/archive" "$LOG_DIR"
 notify "Drive backup started" "Do not eject $DISK_NAME."
+print "=== Step 1 of 2: new, renamed, moved, and deleted files" >> "$LOG"
 
 # Step 1: follow renames and moves, download new files, archive deleted files.
 # --track-renames finds a file with the same checksum under a new name or folder,
@@ -136,6 +153,7 @@ STATUS=$?
 # Step 2: download changed files. They replace the old copy, with no archive copy.
 # Only runs if step 1 had no errors.
 if [[ $STATUS -eq 0 ]]; then
+  print "=== Step 2 of 2: changed files" >> "$LOG"
   caffeinate -i rclone copy "$REMOTE$FOLDER" "$BASE/current/$FOLDER" \
     "${DRY_RUN[@]}" \
     "${TIME_WINDOW[@]}" "${IGNORE[@]}" \
@@ -145,8 +163,10 @@ if [[ $STATUS -eq 0 ]]; then
 fi
 
 if [[ $STATUS -eq 0 ]]; then
+  print "=== Backup complete $(date). Safe to eject $DISK_NAME." >> "$LOG"
   notify "Drive backup complete" "Safe to eject $DISK_NAME."
 else
+  print "=== Backup had errors $(date). Run it again to retry." >> "$LOG"
   notify "Drive backup had errors" "Run it again to retry. Log: $STAMP.log"
 fi
 exit $STATUS

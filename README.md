@@ -83,11 +83,35 @@ The first backup copies everything, about 19 GB. Later backups copy only new and
    ```
 
 2. Connect the disk. A prompt asks "Back up Google Drive to jeremy-backup now?"
-3. Click **Start**, or **Skip**. No answer in 60 seconds means Skip.
+3. Click one of the three buttons:
+   - **Back up** runs the backup in the background.
+   - **Back up and show progress** runs the backup, and opens a Terminal window that shows its progress.
+   - **Cancel** does nothing. No answer in 60 seconds also means Cancel.
 
 The prompt appears at most once in 12 hours. To back up again sooner, run the script by hand. To remove the job, run `./install.sh --uninstall`.
 
 The first time, macOS asks for access to the removable disk. Click **Allow**. Notifications appear under **Script Editor** in System Settings.
+
+### Watch the progress
+
+Run this at any time:
+
+```bash
+./progress.sh
+```
+
+- If a backup is running, it shows the progress until the backup ends. Then it says "The backup has finished."
+- If no backup is running, it shows the end of the last log.
+
+It shows the current step, a progress line every 10 seconds, each finished file, and any errors. A progress line looks like this:
+
+```
+20:51:10    6.2 GiB / 19.3 GiB, 32%, 9.8 MiB/s, ETA 22m
+```
+
+Press `Ctrl+C` to stop watching. This does not stop the backup.
+
+A backup that you start by hand in Terminal shows its own live progress. You do not need `progress.sh` for it.
 
 ### Check the backup
 
