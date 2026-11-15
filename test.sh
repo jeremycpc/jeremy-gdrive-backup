@@ -23,6 +23,8 @@ setup() {
   DISK="$VOLS/TestDisk"
   BASE="$DISK/drive-backup"
   STUBS="$TMP/stubs"
+  LOGS="$TMP/mac-logs"                  # stands in for ~/Library/Logs/drive-backup
+  MARKER="$LOGS/last-asked-TestDisk"
 
   mkdir -p "$SRC/Photos" "$SRC/Docs" "$DISK/photos" "$STUBS"
   print "beach" > "$SRC/Photos/beach.jpg"
@@ -54,7 +56,12 @@ esac
 exit 0
 STUB
   print '#!/bin/sh\nexit 0' > "$STUBS/launchctl"
-  print '#!/bin/sh\necho "open $*" >> "$CALLS"' > "$STUBS/open"
+  cat > "$STUBS/open" <<'STUB'
+#!/bin/sh
+echo "open $*" >> "$CALLS"
+[ -s "$DRIVE_BACKUP_LOCK/log" ] && echo "lock-has-log $(cat "$DRIVE_BACKUP_LOCK/log")" >> "$CALLS"
+exit 0
+STUB
   print '#!/bin/sh\n[ "$1" = "-i" ] && shift\nexec "$@"' > "$STUBS/caffeinate"
   chmod +x "$STUBS"/*
 }
@@ -67,12 +74,31 @@ teardown() {
 # Run the backup script against the sandbox. Output goes to $OUT.
 run_backup() {
   OUT="$TMP/out.txt"
-  PATH="$STUBS:$PATH" CALLS="$CALLS" DIALOG_ANSWER="${DIALOG_ANSWER:-}" TOUCH_FLAG="${TOUCH_FLAG:-}" \
+  PATH="$STUBS:$PATH" CALLS="$CALLS" DIALOG_ANSWER="${DIALOG_ANSWER:-}" \
   DRIVE_BACKUP_REMOTE="${REMOTE_OVERRIDE:-$SRC/}" \
   DRIVE_BACKUP_VOLUMES="$VOLS" \
   DRIVE_BACKUP_DISK="${DISK_OVERRIDE:-TestDisk}" \
-  DRIVE_BACKUP_LOCK="$TMP/lock" \
+  DRIVE_BACKUP_LOCK="$TMP/lock" DRIVE_BACKUP_LOG_DIR="$LOGS" \
     "$SCRIPT" "$@" > "$OUT" 2>&1
+}
+
+# Run progress.sh against the sandbox, with a 20-second limit, so a broken
+# progress.sh fails the test and does not hang it. Output goes to $OUT.
+run_progress() {
+  OUT="$TMP/out.txt"
+  ( DRIVE_BACKUP_LOG_DIR="$LOGS" DRIVE_BACKUP_LOCK="$TMP/lock" \
+    DRIVE_BACKUP_PROGRESS_WAIT="${PROGRESS_WAIT:-10}" \
+    exec "${SCRIPT:h}/progress.sh" ) > "$OUT" 2>&1 &
+  local pid=$! n=0
+  while kill -0 $pid 2>/dev/null; do
+    if (( n++ >= 40 )); then
+      pkill -P $pid 2>/dev/null; kill $pid 2>/dev/null
+      fail "progress.sh did not finish within 20 seconds"
+      return 124
+    fi
+    sleep 0.5
+  done
+  wait $pid
 }
 
 # Assertions. Each one records a failure message but does not stop the test.
@@ -149,7 +175,7 @@ test_04_first_run_copies_everything() {
   assert_content "$BASE/current/Docs/notes.docx" "notes v1"
   assert_content "$BASE/current/budget.csv" "budget"
   assert_count "$BASE/archive" 0
-  assert_count "$BASE/logs" 1
+  assert_count "$LOGS" 1
   assert_no_path "$TMP/lock"
   assert_others_untouched
 }
@@ -192,7 +218,7 @@ test_06b_renamed_and_moved_files_update_current() {
   assert_no_path "$BASE/current/Docs/notes.docx"
   assert_no_path "$BASE/current/Photos/beach.jpg"
   assert_count "$BASE/archive" 0
-  local log=$(ls -t "$BASE"/logs/*.log | head -1)
+  local log=$(ls -t "$LOGS"/*.log | head -1)
   grep -q 'Renamed from' "$log" || fail "rclone did not rename on the disk"
   ! grep -qE 'notes-final.docx: Copied|beach.jpg: Copied' "$log" \
     || fail "a renamed file was downloaded again"
@@ -290,7 +316,7 @@ test_11_step_two_skipped_when_step_one_fails() {
   # rclone retries each command 3 times. One "Attempt 3/3" line means only step 1 ran.
   # (rclone sync also refuses to move files after read errors, so the checks
   # below pass even without the script's own guard. This line tests the guard.)
-  local attempts=$(cat "$BASE"/logs/*.log | grep -c "Attempt 3/3 failed")
+  local attempts=$(cat "$LOGS"/*.log | grep -c "Attempt 3/3 failed")
   [[ $attempts -eq 1 ]] || fail "step 2 ran after step 1 failed ($attempts rclone commands failed)"
   # The deleted file must stay in current, because step 2 did not run.
   assert_content "$BASE/current/budget.csv" "budget"
@@ -313,13 +339,13 @@ test_13_auto_start_runs_backup() {
   grep -q "Safe to eject" "$CALLS" || fail "no 'Safe to eject' notification"
   ! grep -q "Transferred:" "$OUT" || fail "live progress went to the launchd log"
   ! grep -q "^open " "$CALLS" || fail "Terminal opened, but only Back up was clicked"
-  local log=$(ls -t "$BASE"/logs/*.log | head -1)
+  local log=$(ls -t "$LOGS"/*.log | head -1)
   grep -q "^=== Step 1 of 2" "$log" || fail "log has no step 1 marker"
   grep -q "^=== Step 2 of 2" "$log" || fail "log has no step 2 marker"
   grep -q "^=== Backup complete" "$log" || fail "log has no end marker"
   grep -qE 'INFO  : +[0-9.]+ [KMGT]?i?B / [0-9.]+ [KMGT]?i?B, [0-9-]+%?.*ETA' "$log" \
     || fail "log has no one-line progress for progress.sh"
-  assert_file "$BASE/.last-asked"
+  assert_file "$MARKER"
   assert_no_path "$TMP/lock"
   assert_others_untouched
 }
@@ -331,9 +357,10 @@ test_13b_auto_progress_opens_terminal() {
   assert_content "$BASE/current/budget.csv" "budget"
   grep -q "^open -a Terminal ${SCRIPT:h}/progress.sh$" "$CALLS" \
     || fail "Terminal did not open progress.sh"
-  local log=$(ls -t "$BASE"/logs/*.log | head -1)
-  grep -q "^=== Backup started" "$log" || fail "log was not created before Terminal opened"
-  (( $(ls "$BASE"/logs/*.log | wc -l) == 1 )) || fail "expected one log file"
+  local log=$(ls -t "$LOGS"/*.log | head -1)
+  grep -q "^=== Backup started" "$log" || fail "log has no start marker"
+  grep -qx "lock-has-log $log" "$CALLS" || fail "Terminal opened before the log path was in the lock"
+  (( $(ls "$LOGS"/*.log | wc -l) == 1 )) || fail "expected one log file"
 }
 
 test_14_auto_skip_does_not_back_up() {
@@ -362,7 +389,7 @@ test_16_auto_asks_once_in_quiet_period() {
 
 test_17_auto_asks_again_after_quiet_period() {
   DIALOG_ANSWER=Skip run_backup --auto
-  touch -t 202001010000 "$BASE/.last-asked"   # pretend it asked long ago
+  touch -t 202001010000 "$MARKER"   # pretend it asked long ago
   : > "$CALLS"
   DIALOG_ANSWER=Start run_backup --auto
   assert_status $? 0
@@ -370,21 +397,20 @@ test_17_auto_asks_again_after_quiet_period() {
   assert_content "$BASE/current/budget.csv" "budget"
 }
 
-test_17b_marker_written_after_answer_when_first_write_blocked() {
-  # Stand-in for macOS blocking the first write, before you click Allow.
-  cat > "$STUBS/touch" <<'STUB'
-#!/bin/sh
-if [ ! -e "$TOUCH_FLAG" ]; then : > "$TOUCH_FLAG"; echo "touch: Operation not permitted" >&2; exit 1; fi
-exec /usr/bin/touch "$@"
-STUB
-  chmod +x "$STUBS/touch"
-  TOUCH_FLAG="$TMP/touch-blocked-once" DIALOG_ANSWER=Skip run_backup --auto
+test_17b_script_writes_nothing_on_the_disk_itself() {
+  # macOS blocks this script (zsh) from writing to removable disks. Only rclone
+  # may write there. So logs and the marker must be on the Mac.
+  DIALOG_ANSWER=Start run_backup --auto
   assert_status $? 0
-  assert_file "$TMP/touch-blocked-once"
-  assert_file "$BASE/.last-asked"
-  : > "$CALLS"
-  TOUCH_FLAG="$TMP/touch-blocked-once" DIALOG_ANSWER=Start run_backup --auto
-  assert_silent
+  [[ "$(ls -A "$BASE")" == "current" ]] || fail "disk has more than current: $(ls -A "$BASE" | tr '\n' ' ')"
+  assert_file "$MARKER"
+  assert_count "$LOGS" 2    # one log and the marker
+}
+
+test_17c_skipped_prompt_leaves_no_log() {
+  DIALOG_ANSWER=Skip run_backup --auto
+  assert_file "$MARKER"
+  assert_count "$LOGS" 1    # only the marker
 }
 
 test_18_auto_stops_silently_when_backup_running() {
@@ -406,27 +432,27 @@ test_19_manual_run_never_asks() {
 
 test_19b_progress_shows_last_log_when_idle() {
   run_backup
-  OUT="$TMP/out.txt"
-  DRIVE_BACKUP_DISK=TestDisk DRIVE_BACKUP_VOLUMES="$VOLS" DRIVE_BACKUP_LOCK="$TMP/lock" \
-    "${SCRIPT:h}/progress.sh" > "$OUT" 2>&1
+  run_progress
   assert_status $? 0
   assert_output "No backup is running"
   assert_output "=== Backup complete"
   assert_output "budget.csv: Copied"
 }
 
-test_19c_progress_follows_running_backup_until_it_ends() {
-  local log="$BASE/logs/2026-01-01_000000.log"
-  mkdir -p "$BASE/logs" "$TMP/lock"
+test_19c_progress_follows_the_running_backups_log() {
+  # An older log is newer on disk than the running backup's log. progress.sh
+  # must use the path in the lock, not the newest file.
+  local log="$LOGS/2026-01-01_000000.log" old="$LOGS/2026-01-01_000001.log"
+  mkdir -p "$LOGS" "$TMP/lock"
   print "=== Step 1 of 2: new files" > "$log"
+  print "2026/01/01 00:00:00 INFO  : OLD-BACKUP.pdf: Copied (new)" > "$old"
+  print -r -- "$log" > "$TMP/lock/log"
   ( sleep 2
-    print "2026/01/01 00:00:05 INFO  : 1 GiB / 2 GiB, 50%, 10 MiB/s, ETA 1m" >> "$log"
+    print "2026/01/01 00:00:05 INFO  :    1 GiB / 2 GiB, 50%, 10 MiB/s, ETA 1m" >> "$log"
     print "2026/01/01 00:00:06 DEBUG : noise" >> "$log"
     print "=== Backup complete" >> "$log"
-    sleep 1; rmdir "$TMP/lock" ) &
-  OUT="$TMP/out.txt"
-  DRIVE_BACKUP_DISK=TestDisk DRIVE_BACKUP_VOLUMES="$VOLS" DRIVE_BACKUP_LOCK="$TMP/lock" \
-    "${SCRIPT:h}/progress.sh" > "$OUT" 2>&1
+    sleep 1; rm -f "$TMP/lock/log"; rmdir "$TMP/lock" ) &
+  run_progress
   assert_status $? 0
   wait
   assert_output "=== Step 1 of 2"
@@ -434,6 +460,36 @@ test_19c_progress_follows_running_backup_until_it_ends() {
   assert_output "=== Backup complete"
   assert_output "The backup has finished"
   ! grep -q "noise" "$OUT" || fail "progress shows debug lines"
+  ! grep -q "OLD-BACKUP" "$OUT" || fail "progress shows an old log"
+  ! pgrep -f "tail -n \+1 -F $log" >/dev/null || fail "tail is still running"
+}
+
+test_19d_progress_never_shows_old_log_without_lock_path() {
+  mkdir -p "$LOGS" "$TMP/lock"
+  print "2026/01/01 00:00:00 INFO  : OLD-BACKUP.pdf: Copied (new)" > "$LOGS/old.log"
+  PROGRESS_WAIT=1 run_progress
+  assert_status $? 1
+  assert_output "waiting for an answer to its prompt"
+  ! grep -q "OLD-BACKUP" "$OUT" || fail "progress shows an old log"
+}
+
+test_19e_progress_shows_checking_once_instead_of_repeats() {
+  mkdir -p "$LOGS"
+  { print "=== Step 1 of 2: new files"
+    for i in 1 2 3; do print "2026/01/01 00:00:0$i INFO  :          0 B / 0 B, -, 0 B/s, ETA -"; done
+    print "2026/01/01 00:00:04 INFO  :    1 MiB / 2 MiB, 50%, 1 MiB/s, ETA 1s"
+    print "2026/01/01 00:00:05 INFO  : a.pdf: Copied (new)"
+    for i in 6 7 8; do print "2026/01/01 00:00:0$i INFO  :    2 MiB / 2 MiB, 100%, 0 B/s, ETA -"; done
+    print "=== Backup complete"
+  } > "$LOGS/a.log"
+  run_progress
+  assert_status $? 0
+  (( $(grep -c "0 B / 0 B" "$OUT") == 0 )) || fail "progress shows 0 B / 0 B lines"
+  (( $(grep -c "2 MiB / 2 MiB" "$OUT") == 1 )) || fail "progress repeats the same line"
+  # One "Checking files" for the 0 B lines, one for the repeated 100% lines.
+  (( $(grep -c "Checking files" "$OUT") == 2 )) || fail "expected 2 Checking files lines, got $(grep -c "Checking files" "$OUT")"
+  assert_output "1 MiB / 2 MiB, 50%"
+  assert_output "a.pdf: Copied"
 }
 
 test_20_install_writes_valid_job() {
@@ -471,7 +527,7 @@ test_21_second_run_on_hfs_disk_changes_nothing() {
   sleep 1   # each run gets its own log file, named to the second
   DISK_OVERRIDE=HfsDisk run_backup
   assert_status $? 0
-  local log=$(ls -t "$mnt"/drive-backup/logs/*.log | head -1)
+  local log=$(ls -t "$LOGS"/*.log | head -1)
   ! grep -qE "Copied|Updated modification time" "$log" \
     || fail "second run changed files: $(grep -E 'Copied|Updated' "$log" | head -1)"
   assert_count "$mnt/drive-backup/archive" 0

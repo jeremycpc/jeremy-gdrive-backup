@@ -12,11 +12,12 @@ rclone downloads straight from Google to the disk. The Mac's internal disk holds
 /Volumes/jeremy-backup/
 └── drive-backup/
     ├── current/   exact copy of Google Drive
-    ├── archive/   files deleted from Drive
-    └── logs/      one log file per backup
+    └── archive/   files deleted from Drive
 ```
 
 The script writes only inside `drive-backup`. Other folders on the disk never change.
+
+The logs stay on the Mac, in `~/Library/Logs/drive-backup/`. macOS lets rclone write to the disk, but not the script itself.
 
 ### What each change in Drive does
 
@@ -103,11 +104,13 @@ Run this at any time:
 - If a backup is running, it shows the progress until the backup ends. Then it says "The backup has finished."
 - If no backup is running, it shows the end of the last log.
 
-It shows the current step, a progress line every 10 seconds, each finished file, and any errors. A progress line looks like this:
+It shows the current step, each finished file, and any errors. While data moves, it shows a progress line every 10 seconds:
 
 ```
 20:51:10    6.2 GiB / 19.3 GiB, 32%, 9.8 MiB/s, ETA 22m
 ```
+
+While rclone only compares files, it shows "Checking files..." once. Each step compares all files first, which takes about 1 minute.
 
 Press `Ctrl+C` to stop watching. This does not stop the backup.
 
@@ -123,8 +126,11 @@ This compares every file on the disk with Google Drive.
 
 ### Logs
 
-- Each backup writes a detailed log to `drive-backup/logs/` on the disk.
-- The automatic job also writes a short log to `~/Library/Logs/drive-backup.log`.
+All logs are on the Mac:
+
+- `~/Library/Logs/drive-backup/<date>_<time>.log` is the detailed log of each backup.
+- `~/Library/Logs/drive-backup/last-asked-jeremy-backup` records when the prompt last appeared.
+- `~/Library/Logs/drive-backup.log` is the short log of the automatic job.
 
 ## One-time setup
 

@@ -17,7 +17,13 @@
 #   drive-backup/current/  exact copy of Google Drive
 #   drive-backup/archive/  files deleted from Drive, renamed with the backup date
 #                          (renamed and moved files are renamed in current instead)
-#   drive-backup/logs/     one log file per run
+#
+# On the Mac, in ~/Library/Logs/drive-backup/:
+#   <date>_<time>.log      one log file per run
+#   last-asked-<disk>      when the --auto prompt last appeared
+#
+# Only rclone writes to the external disk. macOS gives disk access per
+# program, and this script (zsh) does not have access to removable disks.
 
 # Change DISK_NAME to your disk name, or set DRIVE_BACKUP_DISK in your shell.
 DISK_NAME="${DRIVE_BACKUP_DISK:-jeremy-backup}"
@@ -44,9 +50,9 @@ DISK="$VOLUMES/$DISK_NAME"
 BASE="$DISK/drive-backup"
 FOLDER="${1:-}"
 STAMP=$(date +%Y-%m-%d_%H%M%S)
-LOG_DIR="$BASE/logs"
+LOG_DIR="${DRIVE_BACKUP_LOG_DIR:-$HOME/Library/Logs/drive-backup}"
 LOG="$LOG_DIR/$STAMP.log"
-LAST_ASKED="$BASE/.last-asked"
+LAST_ASKED="$LOG_DIR/last-asked-$DISK_NAME"
 
 notify() {
   osascript -e "display notification \"$2\" with title \"$1\""
@@ -78,38 +84,40 @@ if ! mkdir "$LOCK" 2>/dev/null; then
   echo "A backup is already running. If not, run: rmdir $LOCK"
   exit 1
 fi
-trap 'rmdir "$LOCK"' EXIT
+trap 'rm -f "$LOCK/log"; rmdir "$LOCK"' EXIT
 
 # In --auto mode, ask before the backup starts.
 if (( AUTO )); then
-  mkdir -p "$BASE" 2>/dev/null
-  touch "$LAST_ASKED" 2>/dev/null
+  mkdir -p "$LOG_DIR" && touch "$LAST_ASKED" || echo "$(date): could not write $LAST_ASKED"
   # A button named "Cancel" makes osascript fail with no output. That also skips.
   answer=$(osascript -e "display dialog \"Back up Google Drive to $DISK_NAME now?\" \
     with title \"Google Drive backup\" \
     buttons {\"Cancel\", \"Back up\", \"Back up and show progress\"} \
     default button \"Back up\" giving up after $PROMPT_SECONDS" 2>/dev/null)
-  # macOS can block the first write to the disk until you allow access in its
-  # own prompt. So write the marker again after the answer.
-  mkdir -p "$BASE" 2>/dev/null
-  touch "$LAST_ASKED" 2>/dev/null || echo "$(date): could not write $LAST_ASKED"
   choice="${${answer#button returned:}%%, gave up:*}"
   if [[ "$answer" == *"gave up:true"* || ( "$choice" != "Back up" && "$choice" != "Back up and show progress" ) ]]; then
     echo "$(date): backup skipped."
     exit 0
   fi
-  if [[ "$choice" == "Back up and show progress" ]]; then
-    # Create the log first, so progress.sh finds this backup's log.
-    mkdir -p "$LOG_DIR" 2>/dev/null
-    print "=== Backup started $(date)" >> "$LOG"
-    open -a Terminal "$SCRIPT_DIR/progress.sh"
-  fi
+fi
+
+# Create the log, and record its path in the lock, so progress.sh shows this
+# backup's log and not an older one.
+if ! mkdir -p "$LOG_DIR" || ! print "=== Backup started $(date)" >> "$LOG"; then
+  echo "Cannot write the log file $LOG"
+  exit 1
+fi
+print -r -- "$LOG" > "$LOCK/log"
+
+if (( AUTO )) && [[ "$choice" == "Back up and show progress" ]]; then
+  open -a Terminal "$SCRIPT_DIR/progress.sh"
 fi
 
 # Stop if Google Drive cannot be reached.
 if ! rclone lsd "$REMOTE" >/dev/null 2>&1; then
   notify "Drive backup failed" "Cannot reach Google Drive."
   echo "Cannot reach Google Drive. Check the internet, or run: rclone config reconnect $REMOTE"
+  print "=== Backup failed: cannot reach Google Drive." >> "$LOG"
   exit 1
 fi
 
@@ -130,7 +138,7 @@ else
   PROGRESS=(--stats 10s --stats-one-line)
 fi
 
-mkdir -p "$BASE/current" "$BASE/archive" "$LOG_DIR"
+# rclone creates the folders on the disk when it needs them.
 notify "Drive backup started" "Do not eject $DISK_NAME."
 print "=== Step 1 of 2: new, renamed, moved, and deleted files" >> "$LOG"
 
